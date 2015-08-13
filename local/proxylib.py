@@ -1532,43 +1532,6 @@ class Net2(object):
         return response
 
 
-class ProxyNet2(Net2):
-    """Proxy Connection Mixin"""
-    def __init__(self, proxy_host, proxy_port, proxy_username='', proxy_password=''):
-        self.proxy_host = proxy_host
-        self.proxy_port = proxy_port
-        self.proxy_username = proxy_username
-        self.proxy_password = proxy_password
-
-    def gethostsbyname(self, hostname):
-        try:
-            return socket.gethostbyname_ex(hostname)[-1]
-        except socket.error:
-            return [hostname]
-
-    def create_tcp_connection(self, hostname, port, timeout, **kwargs):
-        sock = socket.create_connection((self.proxy_host, int(self.proxy_port)))
-        if hostname.endswith('.appspot.com'):
-            hostname = 'www.google.com'
-        request_data = 'CONNECT %s:%s HTTP/1.1\r\n' % (hostname, port)
-        if self.proxy_username and self.proxy_password:
-            request_data += 'Proxy-Authorization: Basic %s\r\n' % base64.b64encode(('%s:%s' % (self.proxy_username, self.proxy_password)).encode()).decode().strip()
-        request_data += '\r\n'
-        sock.sendall(request_data)
-        response = httplib.HTTPResponse(sock)
-        response.fp.close()
-        response.fp = sock.makefile('rb', 0)
-        response.begin()
-        if response.status >= 400:
-            raise httplib.BadStatusLine('%s %s %s' % (response.version, response.status, response.reason))
-        return sock
-
-    def create_ssl_connection(self, hostname, port, timeout, **kwargs):
-        sock = self.create_tcp_connection(hostname, port, timeout, **kwargs)
-        ssl_sock = ssl.wrap_socket(sock)
-        return ssl_sock
-
-
 class AdvancedNet2(Net2):
     """getaliasbyname/gethostsbyname/create_tcp_connection/create_ssl_connection/create_http_request"""
     def __init__(self, window=4, connect_timeout=6, timeout=8, ssl_version='TLSv1', dns_servers=['8.8.8.8', '114.114.114.114'], dns_blacklist=[], dns_cachesize=64*1024):
@@ -1805,9 +1768,9 @@ class AdvancedNet2(Net2):
                 sock.settimeout(min(self.connect_timeout, timeout))
                 # pick up the certificate
                 if not validate:
-                    ssl_sock = ssl.wrap_socket(sock, ssl_version=self.ssl_version, do_handshake_on_connect=False)
+                    ssl_sock = ssl.wrap_socket(sock, ssl_version=self.ssl_version, ciphers='ECDHE-RSA-AES128-SHA', do_handshake_on_connect=False)
                 else:
-                    ssl_sock = ssl.wrap_socket(sock, ssl_version=self.ssl_version, cert_reqs=ssl.CERT_REQUIRED, ca_certs=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cacert.pem'), do_handshake_on_connect=False)
+                    ssl_sock = ssl.wrap_socket(sock, ssl_version=self.ssl_version, ciphers='ECDHE-RSA-AES128-SHA', cert_reqs=ssl.CERT_REQUIRED, ca_certs=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'cacert.pem'), do_handshake_on_connect=False)
                 ssl_sock.settimeout(min(self.connect_timeout, timeout))
                 # start connection time record
                 start_time = time.time()
@@ -2038,11 +2001,11 @@ class AdvancedNet2(Net2):
             logging.debug('%s good_ipaddrs=%d, unknown_ipaddrs=%r, bad_ipaddrs=%r', cache_key, len(good_ipaddrs), len(unknown_ipaddrs), len(bad_ipaddrs))
             queobj = Queue.Queue()
             for addr in addrs:
-                if sys.platform != 'win32':
+                #if sys.platform != 'win32':
                     # Workaround for CPU 100% issue under MacOSX/Linux
                     thread.start_new_thread(create_connection, (addr, timeout, queobj))
-                else:
-                    thread.start_new_thread(create_connection_withopenssl, (addr, timeout, queobj))
+                #else:
+                #    thread.start_new_thread(create_connection_withopenssl, (addr, timeout, queobj))
             errors = []
             for i in range(len(addrs)):
                 sock = queobj.get()
@@ -2198,6 +2161,44 @@ class AdvancedNet2(Net2):
                 self.host_postfix_endswith = tuple(set(self.host_postfix_endswith + (pattern,)))
             else:
                 self.host_map[pattern] = hosts
+
+
+class ProxyNet2(AdvancedNet2):
+    """Proxy Connection Mixin"""
+    def __init__(self, proxy_host, proxy_port, proxy_username='', proxy_password=''):
+        super(ProxyNet2, self).__init__()
+        self.proxy_host = proxy_host
+        self.proxy_port = proxy_port
+        self.proxy_username = proxy_username
+        self.proxy_password = proxy_password
+
+    def gethostsbyname(self, hostname):
+        try:
+            return socket.gethostbyname_ex(hostname)[-1]
+        except socket.error:
+            return [hostname]
+
+    def create_tcp_connection(self, hostname, port, timeout, **kwargs):
+        sock = socket.create_connection((self.proxy_host, int(self.proxy_port)))
+        if hostname.endswith('.appspot.com'):
+            hostname = 'www.google.com'
+        request_data = 'CONNECT %s:%s HTTP/1.1\r\n' % (hostname, port)
+        if self.proxy_username and self.proxy_password:
+            request_data += 'Proxy-Authorization: Basic %s\r\n' % base64.b64encode(('%s:%s' % (self.proxy_username, self.proxy_password)).encode()).decode().strip()
+        request_data += '\r\n'
+        sock.sendall(request_data)
+        response = httplib.HTTPResponse(sock)
+        response.fp.close()
+        response.fp = sock.makefile('rb', 0)
+        response.begin()
+        if response.status >= 400:
+            raise httplib.BadStatusLine('%s %s %s' % (response.version, response.status, response.reason))
+        return sock
+
+    def create_ssl_connection(self, hostname, port, timeout, **kwargs):
+        sock = self.create_tcp_connection(hostname, port, timeout, **kwargs)
+        ssl_sock = ssl.wrap_socket(sock)
+        return ssl_sock
 
 
 class SimpleProxyHandler(BaseHTTPServer.BaseHTTPRequestHandler):
